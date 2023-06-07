@@ -44,6 +44,7 @@ class TABLE_EXPORT HtmlPreviewWidget : public QPrintPreviewWidget {
 
 class TABLE_EXPORT CustomTableModel : public QStandardItemModel {
     Q_OBJECT
+
    public:
     explicit CustomTableModel(const QList<int>& editableColumns, const QList<int>& disabledColumns,
                               QObject* parent = nullptr)
@@ -75,11 +76,37 @@ class TABLE_EXPORT CustomTableModel : public QStandardItemModel {
 class TABLE_EXPORT TableWidget : public QTableView {
     Q_OBJECT
 
+   private:
+    std::function<void(int, int, const QStringList&)> doubleClickHandler;
+    void setRowData(int row, const QStringList& rowData) {
+        for (int column = 0; column < tableModel->columnCount(); ++column) {
+            QStandardItem* item = new QStandardItem();
+            item->setText(rowData.value(column));
+            tableModel->setItem(row, column, item);
+        }
+    }
+
+    // Initialize the table model
+    CustomTableModel* tableModel;
+
+    // Table Headers
+    // e.g ["ID", "First Name", "Created At"]
+    QStringList headers;
+
+    // e.g ["id", "first_name", "created_at"] used in generating json & csv data
+    QStringList fieldNames;
+
+    // Vertical Headers
+    QStringList verticalHeaders;
+
    public:
-    explicit TableWidget(QWidget* parent = nullptr, QList<int> editableColumns = QList<int>(),
+    /**
+     * Constructor for the TableWidget.
+     */
+    explicit TableWidget(QWidget* parent = nullptr, QList<int> editableColumns = QList<int>{},
                          QList<int> disabledColumns = QList<int>{})
         : QTableView(parent) {
-        tableModel = new CustomTableModel(editableColumns, disabledColumns);
+        tableModel = new CustomTableModel(editableColumns, disabledColumns, this);
         setModel(tableModel);
 
         // Set default properties
@@ -97,25 +124,31 @@ class TABLE_EXPORT TableWidget : public QTableView {
         horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     }
 
+    // Destructor
+    ~TableWidget() { tableModel->deleteLater(); }
+
     // Set table horizontal headers.
     // fieldNames should be equal in length to horizontalHeaders(otherwise won't be used)
     // fieldNames are used in generating JSON and CSV data.
     void setHorizontalHeaders(const QStringList& horizontalHeaders,
                               const QStringList& fieldNames_) {
-        // Set the horizontal Headers
-        tableModel->setHorizontalHeaderLabels(horizontalHeaders);
-
-        // Adjust header sizes to fit the contents
-        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-
         // set headers
         headers = horizontalHeaders;
 
         // Set the field names
         fieldNames = fieldNames_;
+
+        // Set the horizontal Headers
+        tableModel->setHorizontalHeaderLabels(horizontalHeaders);
+        // Adjust header sizes to fit the contents
+        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     }
 
-    void setVerticalHeaders(const QStringList& verticalHeaders) {
+    /**
+     * Sets vertical headers for the table.
+     */
+    void setVerticalHeaders(const QStringList& headers) {
+        verticalHeaders = headers;
         if (!verticalHeaders.isEmpty())
             tableModel->setVerticalHeaderLabels(verticalHeaders);
 
@@ -124,17 +157,34 @@ class TABLE_EXPORT TableWidget : public QTableView {
             verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     }
 
-    void setRows(const QVector<QStringList>& rowData) {
+    void resetHeaders() {
+        tableModel->setHorizontalHeaderLabels(headers);
+        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+
+        if (!verticalHeaders.isEmpty()) {
+            tableModel->setVerticalHeaderLabels(verticalHeaders);
+            verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        }
+    }
+
+    /**
+     * @brief Populates the table with data. With replace existing data.
+     * @param data
+     */
+    void setRows(const QVector<QStringList>& data) {
         tableModel->clear();
-        tableModel->setRowCount(rowData.size());
+        tableModel->setRowCount(data.size());
         tableModel->setColumnCount(0);
 
         // Update the column count
-        if (!rowData.isEmpty())
-            tableModel->setColumnCount(rowData[0].size());
+        if (!data.isEmpty())
+            tableModel->setColumnCount(data[0].size());
 
-        for (int row = 0; row < rowData.size(); ++row) {
-            const QStringList& rowDataList = rowData[row];
+        // Update the headers because the table was cleared
+        resetHeaders();
+
+        for (int row = 0; row < data.size(); ++row) {
+            const QStringList& rowDataList = data[row];
             for (int column = 0; column < rowDataList.size(); ++column) {
                 auto item = new QStandardItem(rowDataList[column]);
                 tableModel->setItem(row, column, item);
@@ -142,10 +192,13 @@ class TABLE_EXPORT TableWidget : public QTableView {
         }
     }
 
-    void setDoubleClickHandler(std::function<void(int, int, const QStringList&)> handler) {
+    // Sets the signals and slots for double click on table. Calls handler with data for
+    // the double-clicked row.
+    void setDoubleClickHandler(std::function<void(int row, int col, const QStringList& data)> handler) {
         doubleClickHandler = std::move(handler);
     }
 
+    // Generates an html table and writes it to a QString that is returned.
     QString generateHtmlTable() {
         QString html;
 
@@ -183,6 +236,7 @@ class TABLE_EXPORT TableWidget : public QTableView {
         return html;
     }
 
+    // Generates and returns QString containing CSV for the table data.
     QString generateCsvData() {
         QString csv;
 
@@ -222,7 +276,9 @@ class TABLE_EXPORT TableWidget : public QTableView {
         return csv;
     }
 
-    QString generateJsonData(std::function<QVariant(int, const QString&)> valueConverter) {
+    // Generates and returns QString containing JSON for the table data.
+    // The valueConverter is required if you want to convert cell data to other types from QString.
+    QString generateJsonData(QVariant (*valueConverter)(int col, const QString& cellData) = nullptr) {
         QJsonArray rowsArray;
 
         int rowCount = model()->rowCount();
@@ -240,11 +296,13 @@ class TABLE_EXPORT TableWidget : public QTableView {
                 if (useFields) {
                     columnName = fieldNames[col];
                 }
-                QString cellValue = model()->data(model()->index(row, col)).toString();
 
-                // Convert value using the user-provided callback function
-                QVariant convertedValue = valueConverter(col, cellValue);
-                rowObject[columnName] = QJsonValue::fromVariant(convertedValue);
+                QVariant cellValue = model()->data(model()->index(row, col));
+                if (valueConverter) {
+                    // Convert value using the user-provided callback function
+                    cellValue = valueConverter(col, cellValue.toString());
+                }
+                rowObject[columnName] = QJsonValue::fromVariant(cellValue);
             }
             rowsArray.append(rowObject);
         }
@@ -305,41 +363,6 @@ class TABLE_EXPORT TableWidget : public QTableView {
         if (printDialog.exec() == QDialog::Accepted) {
             textBrowser.print(printer);
         }
-    }
-
-   protected:
-    void keyPressEvent(QKeyEvent* event) override {
-
-        // Check if Ctrl+Shift+P is pressed
-        if (event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier) &&
-            event->key() == Qt::Key_P) {
-            // Show print preview
-            showPrintPreview();
-            return;
-        } else if (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_P) {
-            printTable();
-            return;
-        }
-        QTableView::keyPressEvent(event);
-    }
-
-    void mouseDoubleClickEvent(QMouseEvent* event) override {
-        QModelIndex index = indexAt(event->pos());
-        if (index.isValid()) {
-            int row = index.row();
-            int column = index.column();
-
-            QStringList rowData;
-            for (int c = 0; c < tableModel->columnCount(); ++c) {
-                auto cellItem = tableModel->item(row, c);
-                if (cellItem)
-                    rowData.append(cellItem->text());
-            }
-            doubleClickHandler(row, column, rowData);
-        }
-
-        // Call base class implementation
-        QTableView::mouseDoubleClickEvent(event);
     }
 
     void appendRow(const QStringList& rowData) {
@@ -422,6 +445,41 @@ class TABLE_EXPORT TableWidget : public QTableView {
         return rowData;
     }
 
+   protected:
+    void keyPressEvent(QKeyEvent* event) override {
+
+        // Check if Ctrl+Shift+P is pressed
+        if (event->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier) &&
+            event->key() == Qt::Key_P) {
+            // Show print preview
+            showPrintPreview();
+            return;
+        } else if (event->modifiers() == Qt::ControlModifier && event->key() == Qt::Key_P) {
+            printTable();
+            return;
+        }
+        QTableView::keyPressEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        QModelIndex index = indexAt(event->pos());
+        if (index.isValid()) {
+            int row = index.row();
+            int column = index.column();
+
+            QStringList rowData;
+            for (int c = 0; c < tableModel->columnCount(); ++c) {
+                auto cellItem = tableModel->item(row, c);
+                if (cellItem)
+                    rowData.append(cellItem->text());
+            }
+            doubleClickHandler(row, column, rowData);
+        }
+
+        // Call base class implementation
+        QTableView::mouseDoubleClickEvent(event);
+    }
+
    signals:
     void tableSelectionChanged(int row, int column, const QStringList& rowData);
     void rowUpdated(int row, int column, const QStringList& rowData);
@@ -468,29 +526,6 @@ class TABLE_EXPORT TableWidget : public QTableView {
         }
         emit rowUpdated(row, topLeft.column(), rowData);
     }
-
-   private:
-    std::function<void(int, int, const QStringList&)> doubleClickHandler;
-    void setRowData(int row, const QStringList& rowData) {
-        for (int column = 0; column < tableModel->columnCount(); ++column) {
-            QStandardItem* item = new QStandardItem();
-            item->setText(rowData.value(column));
-            tableModel->setItem(row, column, item);
-        }
-    }
-
-    // Initialize the table model
-    CustomTableModel* tableModel;
-
-    // Store table Headers
-    // e.g ["ID", "First Name", "Created At"]
-    QStringList headers;
-
-    // Stores proper field names matching headers
-    // e.g ["id", "first_name", "created_at"]
-    // These are important when generating json, csv data etc.
-    // Must be equal in length to headers.
-    QStringList fieldNames;
 };
 
 #endif  // TABLE_WIDGET_H
