@@ -18,8 +18,8 @@
 
 class TABLE_EXPORT HtmlPreviewWidget : public QPrintPreviewWidget {
    public:
-    void setHtmlContent(const QString& html) {
-        htmlContent = html;
+    HtmlPreviewWidget(QString html)
+        : htmlContent(html) {
         updatePreview();
     }
 
@@ -29,12 +29,15 @@ class TABLE_EXPORT HtmlPreviewWidget : public QPrintPreviewWidget {
 
         QPainter painter(this);
         QTextDocument doc;
+
         doc.setHtml(htmlContent);
         doc.setDefaultTextOption(QTextOption(Qt::AlignLeft | Qt::AlignTop));
         doc.setPageSize(size());
 
         painter.save();
         painter.translate(rect().topLeft());
+
+        // Draw the document's contents
         doc.drawContents(&painter);
         painter.restore();
     }
@@ -78,6 +81,9 @@ class TABLE_EXPORT TableWidget : public QTableView {
     Q_OBJECT
 
    public:
+    QString title;
+    QUrl logo;
+
     /**
      * Constructor for the TableWidget.
      */
@@ -102,11 +108,25 @@ class TABLE_EXPORT TableWidget : public QTableView {
         connect(model(), &QAbstractItemModel::dataChanged, this, &TableWidget::handleDataChanged,
                 Qt::QueuedConnection);
 
+        contextMenuEnabled = true;
         fit();
     }
 
     // Destructor
-    ~TableWidget() { tableModel->deleteLater(); }
+    ~TableWidget() {
+        tableModel->deleteLater();
+        proxyModel->deleteLater();
+    }
+
+    // Returns the number of rows
+    int rowCount() const {
+        return model()->rowCount();
+    }
+
+    // Returns the number of columns
+    int columnCount() const {
+        return model()->columnCount();
+    }
 
     // Resize headers to fit content
     void fit() {
@@ -120,9 +140,18 @@ class TABLE_EXPORT TableWidget : public QTableView {
         horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     }
 
+    // Set Interactive resizable headers
+    void interactive() {
+        horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    }
+
     // Sets the column to filter on. Default -1 (all columns)
     void setFilterKeyColumn(int column) {
         proxyModel->setFilterKeyColumn(column);
+    }
+
+    void setContextMenuEnabled(bool enabled) {
+        contextMenuEnabled = enabled;
     }
 
     // Set table horizontal headers.
@@ -315,13 +344,25 @@ class TABLE_EXPORT TableWidget : public QTableView {
         // Generate the HTML table
         QString htmlTable = generateHtmlTable();
 
+        QString html = "<div style=\"text-align: center; margin-bottom:16px;\">";
+
+        if (!title.isEmpty()) {
+            html += "<h1 style=\"font-size: 18px; margin-bottom: 4px;\">" + title + "</h1>";
+        }
+
+        if (!logo.isEmpty()) {
+            html += QString("<div style=\"display: inline-block;\"><img src=\"%1\" width=\"64\" height=\"64\" /></div>").arg(logo.toString());
+        }
+
+        html += "<br/> </div>";
+        html += htmlTable;
+
         // Create a QTextDocument to set the HTML content
         QTextDocument document;
-        document.setHtml(htmlTable);
+        document.setHtml(html);
 
         // Create a custom HTML preview widget
-        HtmlPreviewWidget previewWidget;
-        previewWidget.setHtmlContent(htmlTable);
+        HtmlPreviewWidget previewWidget(html);
 
         // Create a QPrintPreviewDialog and set the custom preview widget
         QPrinter printer(QPrinter::HighResolution);
@@ -351,8 +392,21 @@ class TABLE_EXPORT TableWidget : public QTableView {
         // Generate the HTML table from the QTableView
         QString htmlTable = generateHtmlTable();
 
+        QString html = "<div style=\"text-align: center; margin-bottom:16px;\">";
+
+        if (!title.isEmpty()) {
+            html += "<h1 style=\"font-size: 18px; margin-bottom: 4px;\">" + title + "</h1>";
+        }
+
+        if (!logo.isEmpty()) {
+            html += QString("<div style=\"display: inline-block;\"><img src=\"%1\" width=\"64\" height=\"64\" /></div>").arg(logo.toString());
+        }
+
+        html += "<br/> </div>";
+        html += htmlTable;
+
         // Set the HTML content to the QTextBrowser
-        textBrowser.setHtml(htmlTable);
+        textBrowser.setHtml(html);
 
         if (printer == nullptr) {
             printer = new QPrinter(QPrinter::HighResolution);
@@ -410,27 +464,26 @@ class TABLE_EXPORT TableWidget : public QTableView {
         return tableData;
     }
 
-    QList<QList<QVariant>> getSelectedRowsData() const {
-        QList<QList<QVariant>> selectedRowsData;
+    QList<QList<QString>> getSelectedRows() const {
+        QList<QList<QString>> selectedRowsData;
 
         QModelIndexList selectedIndexes = selectionModel()->selectedRows();
         for (const QModelIndex& index : selectedIndexes) {
-            QList<QVariant> rowData;
+            QList<QString> rowData;
 
             for (int col = 0; col < tableModel->columnCount(); ++col) {
                 QModelIndex dataIndex = tableModel->index(index.row(), col);
-                QVariant data = tableModel->data(dataIndex);
+                QString data = tableModel->data(dataIndex).toString();
                 rowData.append(data);
             }
-
             selectedRowsData.append(rowData);
         }
 
         return selectedRowsData;
     }
 
-    std::optional<QList<QVariant>> getCurrentRowData() const {
-        std::optional<QList<QVariant>> rowData;
+    std::optional<QStringList> getCurrentRow() const {
+        std::optional<QStringList> rowData;
 
         QModelIndex index = currentIndex();
         if (index.isValid()) {
@@ -439,10 +492,25 @@ class TABLE_EXPORT TableWidget : public QTableView {
             for (int col = 0; col < tableModel->columnCount(); ++col) {
                 QModelIndex dataIndex = tableModel->index(index.row(), col);
                 QVariant data = tableModel->data(dataIndex);
-                rowData->append(data);
+                rowData->append(data.toString());
             }
         }
         return rowData;
+    }
+
+    void selectRowRange(int startRow, int endRow) {
+        // Create the selection model and get the model index for the desired row
+        QItemSelectionModel* selModel = selectionModel();
+        // Get the model indices for the start and end rows
+        QModelIndex startModelIndex = model()->index(startRow, 0);
+        QModelIndex endModelIndex = model()->index(endRow, 0);
+
+        // Create a selection range for the row range
+        QItemSelection selection(startModelIndex, endModelIndex);
+
+        // Clear the existing selection and select the desired row range
+        selModel->clearSelection();
+        selModel->select(selection, QItemSelectionModel::Select);
     }
 
    protected:
@@ -478,6 +546,49 @@ class TABLE_EXPORT TableWidget : public QTableView {
 
         // Call base class implementation
         QTableView::mouseDoubleClickEvent(event);
+    }
+
+    void contextMenuEvent(QContextMenuEvent* event) override {
+        if (!contextMenuEnabled)
+            return;
+
+        QMenu contextMenu(this);
+
+        // Add actions to the context menu
+        QAction* copyAction = contextMenu.addAction("Copy");
+        QAction* pasteAction = contextMenu.addAction("Paste");
+        QAction* deleteAction = contextMenu.addAction("Remove");
+
+        // Add more actions as needed
+
+        // Show the context menu at the mouse position
+        QPoint pos = event->globalPos();
+        QAction* selectedItem = contextMenu.exec(mapToGlobal(pos));
+
+        // Handle the selected action
+        if (selectedItem == copyAction) {
+            // Perform copy action
+            std::optional<QStringList> rowData = getCurrentRow();
+            if (rowData) {
+                QApplication::clipboard()->setText(rowData->join("\t"));
+            }
+        } else if (selectedItem == pasteAction) {
+            QString clipboardText = QApplication::clipboard()->text();
+            if (clipboardText.isEmpty())
+                return;
+
+            QStringList items = clipboardText.split("\t");
+            if (items.size() == model()->columnCount()) {
+                appendRow(items);
+            }
+        } else if (selectedItem == deleteAction) {
+            QModelIndex index = currentIndex();
+            if (index.isValid()) {
+                deleteRow(index.row());
+            }
+        }
+
+        QTableView::contextMenuEvent(event);
     }
 
    signals:
@@ -543,6 +654,7 @@ class TABLE_EXPORT TableWidget : public QTableView {
             rowData.append(cellData);
         }
         emit rowUpdated(row, topLeft.column(), rowData);
+        return QTableView::dataChanged(topLeft, bottomRight, roles);
     }
 
    private:
@@ -554,6 +666,8 @@ class TABLE_EXPORT TableWidget : public QTableView {
             tableModel->setItem(row, column, item);
         }
     }
+
+    bool contextMenuEnabled;
 
     // Initialize the table model
     CustomTableModel* tableModel;
@@ -574,6 +688,16 @@ class TABLE_EXPORT TableWidget : public QTableView {
     // use fieldNames in generating csv and json
     bool useFields() const {
         return (headers.size() == fieldNames.size()) && (fieldNames.size() == model()->columnCount());
+    }
+
+    void handleValidationError(int row, int column) {
+        QModelIndex index = model()->index(row, column);
+        if (index.isValid()) {
+            // Set the item's background color or display an error message
+            // to indicate the validation error
+            QVariant backgroundColor = QColor(Qt::red);
+            model()->setData(index, backgroundColor, Qt::BackgroundRole);
+        }
     }
 };
 

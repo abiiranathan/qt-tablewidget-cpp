@@ -31,6 +31,8 @@ MainWindow::MainWindow(QWidget* parent)
     ui->setupUi(this);
 
     TableWidget* table = new TableWidget(this, QList<int>(), QList<int>{0, 1});
+    table->title = "RISTAL UNIVERSITY";
+    table->logo = QUrl::fromLocalFile("/home/nabiizy/Downloads/logo-white.png");
 
     table->setHorizontalHeaders(QStringList{"ID", "Name", "DOB", "Sex", "CreatedAt", "Time"},
                                 QStringList{"id", "name", "dob", "sex", "created_at", "time"});
@@ -44,19 +46,26 @@ MainWindow::MainWindow(QWidget* parent)
         QVector<QStringList>{{"1", "Abiira Nathan", "1989-05-18", "Male", "2023-06-07T06:30:13.075Z", "16:30:34"},
                              {"2", "Kwikiriza Dan", "2005-06-12", "Female", "null", "00:30:00"}});
 
-    connect(table, &TableWidget::tableSelectionChanged, this, [](int rows, int cols, QList<QString> rowData) {
-        std::cout << "Selection changed" << std::endl;
-    });
+    connect(
+        table, &TableWidget::tableSelectionChanged, this, [](int rows, int cols, QList<QString> rowData) {
+            std::cout << "Selection changed" << std::endl;
+        },
+        Qt::DirectConnection);
 
     table->setDoubleClickHandler(
-        [](int row, int col, const QList<QString>& rowData) { std::cout << "doubleclick handler" << std::endl; });
+        [table](int row, int col, const QList<QString>& rowData) {
+            std::cout << "doubleclick handler" << std::endl;
+        });
 
     connect(table, &TableWidget::rowUpdated, this, [](int row, int col, const QList<QString>& rowData) {
         std::cout << "rowUpdated" << std::endl;
     });
 
-    table->filterTable("dan");
+    //    table->filterTable("dan");
     setCentralWidget(table);
+
+    QTimer::singleShot(
+        1000, this, [table]() { table->selectRow(0); });
 
     //    writeQStringToFile(table->generateCsvData(), "data.csv");
     //    writeQStringToFile(table->generateJsonData(&valueConverter), "data.json");

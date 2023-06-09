@@ -9,5 +9,7 @@ int main(int argc, char** argv) {
 
     MainWindow w;
     w.show();
+
+    app.setStyle("Windows");
     return app.exec();
 }
