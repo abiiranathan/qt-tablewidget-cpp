@@ -8,6 +8,7 @@
 #include <QPrintPreviewDialog>
 #include <QPrintPreviewWidget>
 #include <QPrinter>
+#include <QRegularExpression>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QtWidgets>
@@ -76,29 +77,6 @@ class TABLE_EXPORT CustomTableModel : public QStandardItemModel {
 class TABLE_EXPORT TableWidget : public QTableView {
     Q_OBJECT
 
-   private:
-    std::function<void(int, int, const QStringList&)> doubleClickHandler;
-    void setRowData(int row, const QStringList& rowData) {
-        for (int column = 0; column < tableModel->columnCount(); ++column) {
-            QStandardItem* item = new QStandardItem();
-            item->setText(rowData.value(column));
-            tableModel->setItem(row, column, item);
-        }
-    }
-
-    // Initialize the table model
-    CustomTableModel* tableModel;
-
-    // Table Headers
-    // e.g ["ID", "First Name", "Created At"]
-    QStringList headers;
-
-    // e.g ["id", "first_name", "created_at"] used in generating json & csv data
-    QStringList fieldNames;
-
-    // Vertical Headers
-    QStringList verticalHeaders;
-
    public:
     /**
      * Constructor for the TableWidget.
@@ -107,7 +85,11 @@ class TABLE_EXPORT TableWidget : public QTableView {
                          QList<int> disabledColumns = QList<int>{})
         : QTableView(parent) {
         tableModel = new CustomTableModel(editableColumns, disabledColumns, this);
-        setModel(tableModel);
+
+        proxyModel = new QSortFilterProxyModel(this);
+        proxyModel->setSourceModel(tableModel);
+        proxyModel->setFilterKeyColumn(-1);
+        setModel(proxyModel);
 
         // Set default properties
         setSelectionMode(QAbstractItemView::SingleSelection);
@@ -120,28 +102,50 @@ class TABLE_EXPORT TableWidget : public QTableView {
         connect(model(), &QAbstractItemModel::dataChanged, this, &TableWidget::handleDataChanged,
                 Qt::QueuedConnection);
 
-        // Set horizontal header resize mode to stretch for each column
-        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        fit();
     }
 
     // Destructor
     ~TableWidget() { tableModel->deleteLater(); }
 
+    // Resize headers to fit content
+    void fit() {
+        // Set horizontal header resize mode to stretch for each column
+        horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    }
+
+    // Resize headers, stretching them to fill parent
+    void stretch() {
+        // Set horizontal header resize mode to stretch for each column
+        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    }
+
+    // Sets the column to filter on. Default -1 (all columns)
+    void setFilterKeyColumn(int column) {
+        proxyModel->setFilterKeyColumn(column);
+    }
+
     // Set table horizontal headers.
     // fieldNames should be equal in length to horizontalHeaders(otherwise won't be used)
     // fieldNames are used in generating JSON and CSV data.
     void setHorizontalHeaders(const QStringList& horizontalHeaders,
-                              const QStringList& fieldNames_) {
+                              const QStringList& fieldNames_ = QStringList()) {
         // set headers
         headers = horizontalHeaders;
-
-        // Set the field names
-        fieldNames = fieldNames_;
 
         // Set the horizontal Headers
         tableModel->setHorizontalHeaderLabels(horizontalHeaders);
         // Adjust header sizes to fit the contents
         horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+
+        // Set the field names
+        fieldNames = fieldNames_;
+    }
+
+    // fieldNames should be equal in length to horizontalHeaders(otherwise won't be used)
+    // fieldNames are used in generating JSON and CSV data.
+    void setFieldNames(const QStringList& fieldNames_) {
+        fieldNames = fieldNames_;
     }
 
     /**
@@ -159,7 +163,8 @@ class TABLE_EXPORT TableWidget : public QTableView {
 
     void resetHeaders() {
         tableModel->setHorizontalHeaderLabels(headers);
-        horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        auto sectionResizeMode = horizontalHeader()->sectionResizeMode(0);
+        horizontalHeader()->setSectionResizeMode(sectionResizeMode);
 
         if (!verticalHeaders.isEmpty()) {
             tableModel->setVerticalHeaderLabels(verticalHeaders);
@@ -168,10 +173,9 @@ class TABLE_EXPORT TableWidget : public QTableView {
     }
 
     /**
-     * @brief Populates the table with data. With replace existing data.
-     * @param data
+     * Populates the table with data.
      */
-    void setRows(const QVector<QStringList>& data) {
+    void setData(const QVector<QStringList>& data) {
         tableModel->clear();
         tableModel->setRowCount(data.size());
         tableModel->setColumnCount(0);
@@ -243,10 +247,7 @@ class TABLE_EXPORT TableWidget : public QTableView {
         int rowCount = model()->rowCount();
         int columnCount = model()->columnCount();
 
-        auto useFields =
-            (headers.size() == fieldNames.size()) && (fieldNames.size() == columnCount);
-
-        if (useFields) {
+        if (useFields()) {
             // Generate CSV headers
             for (int col = 0; col < columnCount; ++col) {
                 if (col > 0) {
@@ -284,8 +285,7 @@ class TABLE_EXPORT TableWidget : public QTableView {
         int rowCount = model()->rowCount();
         int columnCount = model()->columnCount();
 
-        auto useFields =
-            (headers.size() == fieldNames.size()) && (fieldNames.size() == columnCount);
+        auto useCustomFields = useFields();
 
         // Generate JSON data rows
         for (int row = 0; row < rowCount; ++row) {
@@ -293,7 +293,7 @@ class TABLE_EXPORT TableWidget : public QTableView {
             for (int col = 0; col < columnCount; ++col) {
                 QString columnName = model()->headerData(col, Qt::Horizontal).toString();
 
-                if (useFields) {
+                if (useCustomFields) {
                     columnName = fieldNames[col];
                 }
 
@@ -484,6 +484,24 @@ class TABLE_EXPORT TableWidget : public QTableView {
     void tableSelectionChanged(int row, int column, const QStringList& rowData);
     void rowUpdated(int row, int column, const QStringList& rowData);
 
+   public slots:
+    void filterTable(const QString& query,
+                     const QRegularExpression::PatternOption caseSensitivity = QRegularExpression::CaseInsensitiveOption,
+                     int column = -1) {
+
+        if (query.isEmpty()) {
+            proxyModel->invalidate();
+            return;
+        }
+
+        // -1 is all columns
+        if (column >= -1 && column < model()->columnCount()) {
+            proxyModel->setFilterKeyColumn(column);
+        }
+        QRegularExpression regex(query, caseSensitivity);
+        proxyModel->setFilterRegularExpression(regex);
+    }
+
    private slots:
     void handleSelectionChanged(const QItemSelection& selected, const QItemSelection& deselected) {
         Q_UNUSED(deselected);
@@ -525,6 +543,37 @@ class TABLE_EXPORT TableWidget : public QTableView {
             rowData.append(cellData);
         }
         emit rowUpdated(row, topLeft.column(), rowData);
+    }
+
+   private:
+    std::function<void(int, int, const QStringList&)> doubleClickHandler;
+    void setRowData(int row, const QStringList& rowData) {
+        for (int column = 0; column < tableModel->columnCount(); ++column) {
+            QStandardItem* item = new QStandardItem();
+            item->setText(rowData.value(column));
+            tableModel->setItem(row, column, item);
+        }
+    }
+
+    // Initialize the table model
+    CustomTableModel* tableModel;
+
+    // Initialize QSortFilterProxy table model to filter the table.
+    QSortFilterProxyModel* proxyModel;
+
+    // Table Headers
+    // e.g ["ID", "First Name", "Created At"]
+    QStringList headers;
+
+    // e.g ["id", "first_name", "created_at"] used in generating json & csv data
+    QStringList fieldNames;
+
+    // Vertical Headers
+    QStringList verticalHeaders;
+
+    // use fieldNames in generating csv and json
+    bool useFields() const {
+        return (headers.size() == fieldNames.size()) && (fieldNames.size() == model()->columnCount());
     }
 };
 

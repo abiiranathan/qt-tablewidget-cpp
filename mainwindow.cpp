@@ -40,7 +40,7 @@ MainWindow::MainWindow(QWidget* parent)
     table->setItemDelegateForColumn(4, new DateTimeDelegate(this));
     table->setItemDelegateForColumn(5, new TimeDelegate(this));
 
-    table->setRows(
+    table->setData(
         QVector<QStringList>{{"1", "Abiira Nathan", "1989-05-18", "Male", "2023-06-07T06:30:13.075Z", "16:30:34"},
                              {"2", "Kwikiriza Dan", "2005-06-12", "Female", "null", "00:30:00"}});
 
@@ -54,10 +54,12 @@ MainWindow::MainWindow(QWidget* parent)
     connect(table, &TableWidget::rowUpdated, this, [](int row, int col, const QList<QString>& rowData) {
         std::cout << "rowUpdated" << std::endl;
     });
+
+    table->filterTable("dan");
     setCentralWidget(table);
 
-    writeQStringToFile(table->generateCsvData(), "data.csv");
-    writeQStringToFile(table->generateJsonData(&valueConverter), "data.json");
+    //    writeQStringToFile(table->generateCsvData(), "data.csv");
+    //    writeQStringToFile(table->generateJsonData(&valueConverter), "data.json");
 }
 
 MainWindow::~MainWindow() {
